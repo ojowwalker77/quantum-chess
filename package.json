@@ -1,0 +1,19 @@
+{
+  "name": "quantum-chess",
+  "version": "1.0.0",
+  "description": "Quantum chess multiplayer game",
+  "type": "module",
+  "scripts": {
+    "build": "bun build app.ts --outfile=app.js --target=browser",
+    "build:watch": "bun build app.ts --outfile=app.js --target=browser --watch",
+    "start": "bun run server.ts",
+    "dev": "bun run --watch server.ts"
+  },
+  "dependencies": {
+    "ws": "^8.14.2"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/ws": "^8.5.10"
+  }
+}
