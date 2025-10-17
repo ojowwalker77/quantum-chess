@@ -16,6 +16,9 @@ let roomCode: string | null = null;
 let myColor: PlayerColor | null = null;
 let selectedSquare: Position | null = null;
 
+// Server-provided game state (source of truth)
+let gameState: ServerMessage | null = null;
+
 // WebSocket connection
 function connectWebSocket(): void {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -53,18 +56,39 @@ function handleServerMessage(data: ServerMessage): void {
             roomCode = data.roomCode!;
             myColor = data.color!;
             enterGame();
-            document.getElementById('status')!.textContent = 'Game started!';
+            document.getElementById('status')!.textContent = 'Waiting for opponent...';
             break;
 
         case 'opponent_joined':
             document.getElementById('status')!.textContent = 'Opponent joined! Game started.';
-            updateBoard();
             break;
 
-        case 'opponent_move':
-            // Apply opponent's move
-            wasm.makeMove(data.from!.row, data.from!.col, data.to!.row, data.to!.col);
+        case 'game_state':
+            // Received complete game state from server - store and render
+            console.log('Game state received:', data);
+            gameState = data;
+            selectedSquare = null; // Clear selection when state updates
             updateBoard();
+
+            // Update turn status
+            const isMyTurn = data.currentTurn === myColor;
+            if (isMyTurn) {
+                document.getElementById('status')!.textContent = 'Your turn';
+            } else {
+                document.getElementById('status')!.textContent = "Opponent's turn";
+            }
+
+            // Show check warning
+            if (data.isInCheck && isMyTurn) {
+                document.getElementById('status')!.textContent = 'Your turn - CHECK!';
+            }
+            break;
+
+        case 'move_rejected':
+            // Our move was rejected by server
+            console.error('Move rejected:', data.reason);
+            document.getElementById('status')!.textContent = `Invalid move: ${data.reason}`;
+            selectedSquare = null;
             break;
 
         case 'opponent_disconnected':
@@ -146,169 +170,149 @@ function createBoard(): void {
 }
 
 function updateBoard(): void {
-    if (!myColor) return;
+    if (!myColor || !gameState) return;
 
     const board = document.getElementById('board')!;
     const squares = board.children;
-    const currentTurn = wasm.getCurrentTurn();
-    const isMyTurn = COLORS[currentTurn] === myColor;
-    const myColorIndex = COLORS.indexOf(myColor);
+    const isMyTurn = gameState.currentTurn === myColor;
 
+    // Clear all squares
     for (let i = 0; i < 64; i++) {
         const square = squares[i] as HTMLElement;
-        const row = parseInt(square.dataset.row!);
-        const col = parseInt(square.dataset.col!);
-
         square.innerHTML = '';
         square.classList.remove('selected', 'valid-move', 'in-check');
+    }
 
-        // Get piece from WASM (my view - my own pieces)
-        const pieceData = wasm.getPieceAt(row, col, myColorIndex);
-
-        if (pieceData !== -1) {
-            const pieceType = (pieceData >> 8) & 0xFF;
-            const color = pieceData & 0xFF;
-
-            // Show my pieces clearly
-            if (COLORS[color] === myColor) {
-                const pieceDiv = document.createElement('div');
-                pieceDiv.className = 'piece';
-                pieceDiv.textContent = PIECES[COLORS[color]][PIECE_TYPES[pieceType]];
-                pieceDiv.style.color = COLORS[color] === 'white' ? '#f0f0f0' : '#1a1a1a';
-                if (COLORS[color] === 'black') {
-                    pieceDiv.style.webkitTextStroke = '2px #888';
-                }
-                square.appendChild(pieceDiv);
-            }
-        }
-
-        // Show opponent quantum pieces (can be multiple per square)
-        let pieceIndex = 0;
-        while (true) {
-            const quantumData = wasm.getQuantumPieceAt(row, col, myColorIndex, pieceIndex);
-            if (quantumData === -1) break;
-
-            const pieceType = (quantumData >> 16) & 0xFF;
-            const color = (quantumData >> 8) & 0xFF;
-            const probability = quantumData & 0xFF;
-
-            const rowDiv = document.createElement('div');
-            rowDiv.className = 'piece-row';
+    // Render my pieces (classical view from server)
+    if (gameState.myPieces) {
+        for (const { type, position } of gameState.myPieces) {
+            const squareIndex = (7 - position.row) * 8 + position.col;
+            const square = squares[squareIndex] as HTMLElement;
 
             const pieceDiv = document.createElement('div');
             pieceDiv.className = 'piece';
-            pieceDiv.style.opacity = probability === 100 ? '1' : '0.7';
-            pieceDiv.style.fontSize = '32px';
-            pieceDiv.textContent = PIECES[COLORS[color]][PIECE_TYPES[pieceType]];
-            pieceDiv.style.color = COLORS[color] === 'white' ? '#f0f0f0' : '#1a1a1a';
-            if (COLORS[color] === 'black') {
-                pieceDiv.style.webkitTextStroke = '2px #888';
-            }
-
-            rowDiv.appendChild(pieceDiv);
-
-            if (probability < 100) {
-                const probDiv = document.createElement('div');
-                probDiv.className = 'quantum-prob';
-                probDiv.textContent = probability + '%';
-                rowDiv.appendChild(probDiv);
-            }
-
-            square.appendChild(rowDiv);
-            pieceIndex++;
+            pieceDiv.textContent = PIECES[myColor][type];
+            pieceDiv.style.color = myColor === 'white' ? '#ffffff' : '#000000';
+            square.appendChild(pieceDiv);
         }
+    }
 
-        // Highlight selected square
-        if (selectedSquare && selectedSquare.row === row && selectedSquare.col === col) {
-            square.classList.add('selected');
+    // Render opponent quantum pieces
+    if (gameState.opponentQuantumStates) {
+        for (const quantumState of gameState.opponentQuantumStates) {
+            // For each quantum piece, render it at all its possible positions
+            for (const position of quantumState.positions) {
+                const squareIndex = (7 - position.row) * 8 + position.col;
+                const square = squares[squareIndex] as HTMLElement;
+
+                const rowDiv = document.createElement('div');
+                rowDiv.className = 'piece-row';
+
+                const pieceDiv = document.createElement('div');
+                pieceDiv.className = 'piece';
+                const probability = Math.round(quantumState.probability * 100);
+                pieceDiv.style.opacity = probability === 100 ? '1' : '0.7';
+                pieceDiv.style.fontSize = '32px';
+                pieceDiv.textContent = PIECES[quantumState.color][quantumState.piece];
+                pieceDiv.style.color = quantumState.color === 'white' ? '#ffffff' : '#000000';
+
+                rowDiv.appendChild(pieceDiv);
+
+                if (probability < 100) {
+                    const probDiv = document.createElement('div');
+                    probDiv.className = 'quantum-prob';
+                    probDiv.textContent = probability + '%';
+                    rowDiv.appendChild(probDiv);
+                }
+
+                square.appendChild(rowDiv);
+            }
         }
+    }
 
-        // Show valid moves
-        if (selectedSquare && isMyTurn) {
-            const isValid = wasm.isValidMove(selectedSquare.row, selectedSquare.col, row, col, myColorIndex);
-            if (isValid) {
-                square.classList.add('valid-move');
+    // Highlight selected square
+    if (selectedSquare) {
+        const squareIndex = (7 - selectedSquare.row) * 8 + selectedSquare.col;
+        const square = squares[squareIndex] as HTMLElement;
+        square.classList.add('selected');
+
+        // Show valid moves using local WASM validation (for UI only)
+        if (isMyTurn && wasm) {
+            const myColorIndex = COLORS.indexOf(myColor);
+            for (let row = 0; row < 8; row++) {
+                for (let col = 0; col < 8; col++) {
+                    const isValid = wasm.isValidMove(selectedSquare.row, selectedSquare.col, row, col, myColorIndex);
+                    if (isValid) {
+                        const targetSquareIndex = (7 - row) * 8 + col;
+                        const targetSquare = squares[targetSquareIndex] as HTMLElement;
+                        targetSquare.classList.add('valid-move');
+                    }
+                }
             }
         }
     }
 
     // Update turn display
-    document.getElementById('turnDisplay')!.textContent = `turn: ${COLORS[currentTurn]}`;
+    document.getElementById('turnDisplay')!.textContent = `turn: ${gameState.currentTurn}`;
 
     // Check indicator
-    const isCheck = wasm.isInCheck(myColorIndex);
-    document.getElementById('checkDisplay')!.style.display = isCheck ? 'inline' : 'none';
+    document.getElementById('checkDisplay')!.style.display = gameState.isInCheck ? 'inline' : 'none';
 
     // Highlight king in check
-    if (isCheck && myColor && COLORS[currentTurn] === myColor) {
-        for (let i = 0; i < 64; i++) {
-            const sq = squares[i] as HTMLElement;
-            const r = parseInt(sq.dataset.row!);
-            const c = parseInt(sq.dataset.col!);
-            const piece = wasm.getPieceAt(r, c, myColorIndex);
-            if (piece !== -1) {
-                const type = (piece >> 8) & 0xFF;
-                const col = piece & 0xFF;
-                if (type === 5 && COLORS[col] === myColor) {
-                    sq.classList.add('in-check');
-                    break;
-                }
+    if (gameState.isInCheck && isMyTurn && gameState.myPieces) {
+        for (const { type, position } of gameState.myPieces) {
+            if (type === 'king') {
+                const squareIndex = (7 - position.row) * 8 + position.col;
+                const square = squares[squareIndex] as HTMLElement;
+                square.classList.add('in-check');
+                break;
             }
         }
     }
 }
 
 function handleSquareClick(row: number, col: number): void {
-    if (!myColor) return;
+    if (!myColor || !gameState) return;
 
-    const currentTurn = wasm.getCurrentTurn();
-    const isMyTurn = COLORS[currentTurn] === myColor;
+    const isMyTurn = gameState.currentTurn === myColor;
 
     if (!isMyTurn) {
         document.getElementById('status')!.textContent = 'Not your turn';
         return;
     }
 
-    const myColorIndex = COLORS.indexOf(myColor);
-    const pieceData = wasm.getPieceAt(row, col, myColorIndex);
+    // Check if there's a piece at clicked position (from server state)
+    const hasPieceAt = (pos: Position): boolean => {
+        return gameState!.myPieces?.some(p =>
+            p.position.row === pos.row && p.position.col === pos.col
+        ) || false;
+    };
 
     if (selectedSquare) {
         // Try to make a move
-        const success = wasm.makeMove(selectedSquare.row, selectedSquare.col, row, col);
+        const isSameSquare = selectedSquare.row === row && selectedSquare.col === col;
 
-        if (success) {
-            // Send move to opponent
+        if (isSameSquare) {
+            // Deselect
+            selectedSquare = null;
+            updateBoard();
+        } else {
+            // Send move request to server (server validates and executes)
             ws.send(JSON.stringify({
                 type: 'move',
                 from: { row: selectedSquare.row, col: selectedSquare.col },
                 to: { row, col }
             }));
 
-            selectedSquare = null;
-            updateBoard();
-            document.getElementById('status')!.textContent = "Opponent's turn";
-        } else {
-            // Try selecting new piece
-            if (pieceData !== -1) {
-                const color = pieceData & 0xFF;
-                if (COLORS[color] === myColor) {
-                    selectedSquare = { row, col };
-                    updateBoard();
-                }
-            } else {
-                selectedSquare = null;
-                updateBoard();
-            }
+            document.getElementById('status')!.textContent = 'Waiting for server...';
+            // Server will send game_state which will clear selectedSquare
         }
     } else {
-        // Select a piece
-        if (pieceData !== -1) {
-            const color = pieceData & 0xFF;
-            if (COLORS[color] === myColor) {
-                selectedSquare = { row, col };
-                updateBoard();
-                document.getElementById('status')!.textContent = 'Select destination';
-            }
+        // Select a piece if there's one at this position
+        if (hasPieceAt({ row, col })) {
+            selectedSquare = { row, col };
+            updateBoard();
+            document.getElementById('status')!.textContent = 'Select destination';
         }
     }
 }

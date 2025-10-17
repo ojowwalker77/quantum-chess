@@ -45,6 +45,18 @@ export interface Move {
   to: Position;
 }
 
+export interface QuantumState {
+  piece: PieceType;
+  color: PlayerColor;
+  positions: Position[];
+  probability: number;
+}
+
+export interface PieceState {
+  type: PieceType;
+  position: Position;
+}
+
 export interface ServerMessage {
   type: string;
   roomCode?: string;
@@ -52,4 +64,26 @@ export interface ServerMessage {
   message?: string;
   from?: Position;
   to?: Position;
+
+  // game_state message
+  myPieces?: PieceState[];
+  opponentQuantumStates?: QuantumState[];
+  currentTurn?: PlayerColor;
+  isInCheck?: boolean;
+
+  // move_confirmed message
+  move?: Move;
+  wasCapture?: boolean;
+  wasCheck?: boolean;
+  notation?: string;
+
+  // opponent_move message
+  quantumStates?: QuantumState[];
+  capturedPiece?: {
+    type: PieceType;
+    position: Position;
+  };
+
+  // move_rejected message
+  reason?: string;
 }

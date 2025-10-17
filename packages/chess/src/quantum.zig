@@ -115,7 +115,10 @@ pub const QuantumBoard = struct {
             return false;
         }
 
-        const captured_piece = player_board.getPiece(to);
+        // Check opponent's board for captures
+        const opponent_color = self.current_turn.opponent();
+        const opponent_board = if (opponent_color == .white) &self.white_true_board else &self.black_true_board;
+        const captured_piece = opponent_board.getPiece(to);
         const is_capture = captured_piece != null;
 
         const is_castling = moving_piece.piece_type == .king and
@@ -132,8 +135,6 @@ pub const QuantumBoard = struct {
 
         player_board.movePiece(from, to);
 
-        const opponent_color = self.current_turn.opponent();
-        const opponent_board = if (opponent_color == .white) &self.white_true_board else &self.black_true_board;
         const is_check = opponent_board.isInCheck(opponent_color);
 
         const quantum_pieces = if (self.current_turn == .white) &self.white_quantum_pieces else &self.black_quantum_pieces;
@@ -144,12 +145,15 @@ pub const QuantumBoard = struct {
                     qp.piece.color == moving_piece.color and
                     qp.probabilities[from.toIndex()] > 0.0)
                 {
-                    if (is_capture or is_check) {
+                    // Pawns never go into superposition - always collapse
+                    const is_pawn = moving_piece.piece_type == .pawn;
+
+                    if (is_capture or is_check or is_pawn) {
                         // Collapse to definite position (opponent sees it)
                         qp.collapse(to);
                     } else {
-                        // Expand into quantum superposition
-                        try self.expandQuantumState(qp, from, to, allocator);
+                        // Expand into quantum superposition (excluding capture/check positions)
+                        try self.expandQuantumState(qp, from, to, opponent_board, allocator);
                     }
                     break;
                 }
@@ -167,7 +171,7 @@ pub const QuantumBoard = struct {
                         if (is_capture or is_check) {
                             qp.collapse(rook_to.?);
                         } else {
-                            try self.expandQuantumState(qp, rook_from.?, rook_to.?, allocator);
+                            try self.expandQuantumState(qp, rook_from.?, rook_to.?, opponent_board, allocator);
                         }
                         break;
                     }
@@ -200,7 +204,8 @@ pub const QuantumBoard = struct {
     }
 
     // Expand quantum state based on all possible moves from original position
-    fn expandQuantumState(self: *QuantumBoard, qp: *QuantumPiece, from: Position, actual_to: Position, allocator: std.mem.Allocator) !void {
+    // Excludes positions that would capture or check (those would reveal the piece)
+    fn expandQuantumState(self: *QuantumBoard, qp: *QuantumPiece, from: Position, actual_to: Position, opponent_board: *const Board, allocator: std.mem.Allocator) !void {
         // Get all valid moves from the original position
         var valid_moves = std.ArrayList(Position).init(allocator);
         defer valid_moves.deinit();
@@ -212,25 +217,46 @@ pub const QuantumBoard = struct {
         temp_board.setPiece(from, piece);
         temp_board.setPiece(actual_to, null);
 
+        const opponent_color = qp.piece.color.opponent();
+
         for (0..64) |i| {
             const target_pos = Position.fromIndex(@intCast(i));
-            if (temp_board.isValidMove(.{ .from = from, .to = target_pos }, qp.piece.color)) {
-                try valid_moves.append(target_pos);
+
+            // Check if move is valid
+            if (!temp_board.isValidMove(.{ .from = from, .to = target_pos }, qp.piece.color)) {
+                continue;
             }
+
+            // EXCLUDE if this position would capture an opponent piece
+            if (opponent_board.getPiece(target_pos)) |opponent_piece| {
+                if (opponent_piece.color == opponent_color) {
+                    continue; // Skip - would be a capture, forces reveal
+                }
+            }
+
+            // EXCLUDE if this position would put opponent king in check
+            var test_board = opponent_board.*;
+            test_board.setPiece(target_pos, piece);
+            if (test_board.isInCheck(opponent_color)) {
+                continue; // Skip - would be check, forces reveal
+            }
+
+            // This is a valid "quiet" ghost position
+            try valid_moves.append(target_pos);
         }
 
         // Reset probabilities
         qp.probabilities = [_]f32{0.0} ** 64;
         qp.is_collapsed = false;
 
-        // Distribute probability equally among all possible moves
+        // Distribute probability equally among all possible quiet moves
         if (valid_moves.items.len > 0) {
             const prob_each: f32 = 1.0 / @as(f32, @floatFromInt(valid_moves.items.len));
             for (valid_moves.items) |pos| {
                 qp.probabilities[pos.toIndex()] = prob_each;
             }
         } else {
-            // If no valid moves, collapse to actual position
+            // If no valid quiet moves, collapse to actual position
             qp.collapse(actual_to);
         }
     }

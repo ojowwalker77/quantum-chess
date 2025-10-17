@@ -21,6 +21,7 @@ export interface MoveRecord {
   from_col: number;
   to_row: number;
   to_col: number;
+  notation: string; // Chess notation like "e4", "Nf3", "Bxc4+"
   timestamp: string;
   was_capture: boolean;
   was_check: boolean;
@@ -61,12 +62,20 @@ export class GameDatabase {
         from_col INTEGER NOT NULL,
         to_row INTEGER NOT NULL,
         to_col INTEGER NOT NULL,
+        notation TEXT NOT NULL,
         timestamp TEXT NOT NULL,
         was_capture BOOLEAN DEFAULT FALSE,
         was_check BOOLEAN DEFAULT FALSE,
         FOREIGN KEY (game_id) REFERENCES games(id)
       )
     `);
+
+    // Add notation column if it doesn't exist (migration)
+    try {
+      this.db.run(`ALTER TABLE moves ADD COLUMN notation TEXT DEFAULT ''`);
+    } catch (e) {
+      // Column already exists, ignore
+    }
 
     // Indices for performance
     this.db.run(`CREATE INDEX IF NOT EXISTS idx_games_room ON games(room_code)`);
@@ -89,16 +98,17 @@ export class GameDatabase {
     playerColor: string,
     from: { row: number; col: number },
     to: { row: number; col: number },
+    notation: string,
     wasCapture: boolean = false,
     wasCheck: boolean = false
   ): void {
     const stmt = this.db.prepare(`
       INSERT INTO moves (
         game_id, move_number, player_color,
-        from_row, from_col, to_row, to_col,
+        from_row, from_col, to_row, to_col, notation,
         timestamp, was_capture, was_check
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?)
     `);
 
     stmt.run(
@@ -109,6 +119,7 @@ export class GameDatabase {
       from.col,
       to.row,
       to.col,
+      notation,
       wasCapture ? 1 : 0,
       wasCheck ? 1 : 0
     );

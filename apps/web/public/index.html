@@ -15,8 +15,8 @@
 
         body {
             font-family: 'JetBrains Mono', 'Courier New', monospace;
-            background: #1a1a1a;
-            color: #e0e0e0;
+            background: #f5f5f5;
+            color: #2a2a2a;
             min-height: 100vh;
             display: flex;
             align-items: center;
@@ -29,17 +29,17 @@
             top: 20px;
             right: 20px;
             padding: 8px 16px;
-            border: 1px solid #555;
-            background: #2a2a2a;
-            color: #e0e0e0;
+            border: 1px solid #ccc;
+            background: #fff;
+            color: #2a2a2a;
             cursor: pointer;
             font-size: 14px;
             z-index: 1000;
         }
 
         .rules-btn:hover {
-            background: #3a3a3a;
-            border-color: #777;
+            background: #e8e8e8;
+            border-color: #999;
         }
 
         .rules-modal {
@@ -49,15 +49,15 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(0,0,0,0.8);
+            background: rgba(0,0,0,0.6);
             z-index: 2000;
             align-items: center;
             justify-content: center;
         }
 
         .rules-content {
-            background: #2a2a2a;
-            border: 2px solid #555;
+            background: #fff;
+            border: 2px solid #ccc;
             padding: 30px;
             max-width: 600px;
             max-height: 80vh;
@@ -67,7 +67,7 @@
 
         .rules-content h2 {
             margin-bottom: 20px;
-            color: #e0e0e0;
+            color: #2a2a2a;
         }
 
         .rules-content p, .rules-content ul {
@@ -90,7 +90,7 @@
             content: "→";
             position: absolute;
             left: 0;
-            color: #ffd700;
+            color: #0066cc;
         }
 
         .rules-content ul ul {
@@ -103,7 +103,7 @@
         }
 
         .rules-content strong {
-            color: #ffd700;
+            color: #0066cc;
         }
 
         .close-rules {
@@ -112,11 +112,11 @@
             right: 15px;
             font-size: 24px;
             cursor: pointer;
-            color: #aaa;
+            color: #666;
         }
 
         .close-rules:hover {
-            color: #e0e0e0;
+            color: #2a2a2a;
         }
 
         #lobby {
@@ -127,37 +127,37 @@
             font-size: 24px;
             margin-bottom: 30px;
             font-weight: normal;
-            color: #e0e0e0;
+            color: #2a2a2a;
         }
 
         input {
             font-family: 'JetBrains Mono', monospace;
             font-size: 16px;
             padding: 10px;
-            border: 1px solid #555;
-            background: #2a2a2a;
-            color: #e0e0e0;
+            border: 1px solid #ccc;
+            background: #fff;
+            color: #2a2a2a;
             margin: 5px;
         }
 
         input::placeholder {
-            color: #888;
+            color: #999;
         }
 
         button {
             font-family: 'JetBrains Mono', monospace;
             font-size: 16px;
             padding: 10px 20px;
-            border: 1px solid #555;
-            background: #2a2a2a;
-            color: #e0e0e0;
+            border: 1px solid #ccc;
+            background: #fff;
+            color: #2a2a2a;
             cursor: pointer;
             margin: 5px;
         }
 
         button:hover {
-            background: #3a3a3a;
-            border-color: #777;
+            background: #e8e8e8;
+            border-color: #999;
         }
 
         #game {
@@ -167,20 +167,20 @@
         .info {
             margin-bottom: 10px;
             font-size: 14px;
-            color: #e0e0e0;
+            color: #2a2a2a;
         }
 
         #lobbyStatus {
-            color: #aaa;
+            color: #666;
         }
 
         .board {
             display: grid;
             grid-template-columns: repeat(8, 70px);
             grid-template-rows: repeat(8, 70px);
-            border: 3px solid #666;
+            border: 3px solid #999;
             margin: 20px 0;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
         }
 
         .square {
@@ -196,27 +196,27 @@
         }
 
         .square.light {
-            background: #4a4a4a;
-            border: 1px solid #333;
+            background: #f0d9b5;
+            border: 1px solid #ddd;
         }
 
         .square.dark {
-            background: #252525;
-            border: 1px solid #333;
+            background: #b58863;
+            border: 1px solid #ccc;
         }
 
         .square:hover {
-            filter: brightness(1.2);
+            filter: brightness(0.9);
         }
 
         .square.selected {
-            background: #5a6a5a !important;
-            box-shadow: inset 0 0 15px rgba(100,200,100,0.3);
+            background: #9bca3c !important;
+            box-shadow: inset 0 0 15px rgba(100,200,50,0.4);
         }
 
         .square.in-check {
-            background: #8a3a3a !important;
-            box-shadow: inset 0 0 20px rgba(255,100,100,0.4);
+            background: #ff6b6b !important;
+            box-shadow: inset 0 0 20px rgba(255,100,100,0.5);
         }
 
         .square.valid-move::after {
@@ -225,15 +225,15 @@
             width: 16px;
             height: 16px;
             border-radius: 50%;
-            background: rgba(200,200,100,0.7);
-            box-shadow: 0 0 8px rgba(200,200,100,0.5);
+            background: rgba(100,150,50,0.7);
+            box-shadow: 0 0 8px rgba(100,150,50,0.6);
         }
 
         .piece {
             font-size: 40px;
             user-select: none;
             margin: 2px 0;
-            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.8));
+            filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3));
         }
 
         .piece-row {
@@ -245,18 +245,18 @@
 
         .quantum-prob {
             font-size: 11px;
-            color: #ffd700;
-            background: rgba(0,0,0,0.8);
+            color: #fff;
+            background: #0066cc;
             padding: 2px 6px;
             border-radius: 3px;
-            border: 1px solid rgba(255,215,0,0.3);
+            border: 1px solid #0052a3;
             font-weight: bold;
         }
 
         .status {
             font-size: 14px;
             margin-top: 10px;
-            color: #aaa;
+            color: #666;
         }
     </style>
 </head>
