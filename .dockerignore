@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+bun.lockb
+
+# Build artifacts
+dist/
+packages/chess/zig-out/
+packages/chess/zig-cache/
+
+# Development files
+*.log
+.DS_Store
+.env
+.env.local
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Database (will be in volume)
+*.db
+*.db-shm
+*.db-wal
+data/
+
+# Documentation
+README.md
+
+# Docker
+Dockerfile
+docker-compose.yaml
+.dockerignore

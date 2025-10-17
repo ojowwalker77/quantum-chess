@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  quantum-chess:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: quantum-chess
+    ports:
+      - "8080:8080"
+    volumes:
+      - chess-data:/app/data
+    environment:
+      - NODE_ENV=production
+      - DATABASE_PATH=/app/data/quantum-chess.db
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  chess-data:
+    driver: local

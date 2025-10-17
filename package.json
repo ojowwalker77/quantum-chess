@@ -3,11 +3,16 @@
   "version": "1.0.0",
   "description": "Quantum chess multiplayer game",
   "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "build": "bun build app.ts --outfile=app.js --target=browser",
-    "build:watch": "bun build app.ts --outfile=app.js --target=browser --watch",
-    "start": "bun run server.ts",
-    "dev": "bun run --watch server.ts"
+    "build:wasm": "cd packages/chess && zig build && cp zig-out/bin/quantum-chess.wasm ../../dist/wasm/",
+    "build:web": "bun build apps/web/src/main.ts --outfile=dist/web/app.js --target=browser",
+    "build": "bun run build:wasm && bun run build:web",
+    "start": "bun run apps/server/src/index.ts",
+    "dev": "bun run --watch apps/server/src/index.ts"
   },
   "dependencies": {
     "ws": "^8.14.2"
