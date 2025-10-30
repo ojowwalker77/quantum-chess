@@ -1,9 +1,7 @@
-# Dependencies
 node_modules/
 bun.lockb
 package-lock.json
 
-# Build artifacts
 dist/
 packages/chess/zig-out/
 packages/chess/zig-cache/

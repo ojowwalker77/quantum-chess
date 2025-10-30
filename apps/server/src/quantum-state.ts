@@ -143,4 +143,77 @@ export class QuantumStateManager {
       position
     }));
   }
+
+  // Check if a square has opponent ghost(s)
+  hasOpponentGhost(position: Position, playerColor: Color): boolean {
+    const opponentPieces = playerColor === 'white'
+      ? this.blackQuantumPieces
+      : this.whiteQuantumPieces;
+
+    for (const qp of opponentPieces.values()) {
+      if (qp.positions.some(pos => pos.row === position.row && pos.col === position.col)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Check if a square has own ghost(s)
+  hasOwnGhost(position: Position, playerColor: Color): boolean {
+    const ownPieces = playerColor === 'white'
+      ? this.whiteQuantumPieces
+      : this.blackQuantumPieces;
+
+    for (const qp of ownPieces.values()) {
+      // Only consider superposed pieces (multiple positions)
+      if (qp.positions.length > 1 && qp.positions.some(pos => pos.row === position.row && pos.col === position.col)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Get which of my pieces has a ghost at this position
+  getOwnGhostPiece(position: Position, playerColor: Color): QuantumPiece | null {
+    const ownPieces = playerColor === 'white'
+      ? this.whiteQuantumPieces
+      : this.blackQuantumPieces;
+
+    for (const qp of ownPieces.values()) {
+      if (qp.positions.length > 1 && qp.positions.some(pos => pos.row === position.row && pos.col === position.col)) {
+        return qp;
+      }
+    }
+    return null;
+  }
+
+  // Collapse a piece's superposition to its true position
+  collapsePiece(piece: Piece): void {
+    const quantumPieces = piece.color === 'white'
+      ? this.whiteQuantumPieces
+      : this.blackQuantumPieces;
+
+    const truePosition = this.board.getPieces(piece.color).find(
+      p => p.piece.type === piece.type && p.piece.color === piece.color
+    )?.position;
+
+    if (truePosition) {
+      // Remove all entries for this piece
+      const keysToRemove: string[] = [];
+      for (const [key, qp] of quantumPieces.entries()) {
+        if (qp.piece.type === piece.type && qp.piece.color === piece.color) {
+          keysToRemove.push(key);
+        }
+      }
+      keysToRemove.forEach(key => quantumPieces.delete(key));
+
+      // Add it back at true position only
+      const newKey = `${piece.type}-${truePosition.row},${truePosition.col}`;
+      quantumPieces.set(newKey, {
+        piece,
+        positions: [truePosition],
+        probability: 1.0
+      });
+    }
+  }
 }

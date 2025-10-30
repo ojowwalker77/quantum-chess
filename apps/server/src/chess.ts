@@ -88,7 +88,7 @@ export class ClassicalBoard {
   }
 
   // Validate and execute a move
-  makeMove(move: Move): MoveResult {
+  makeMove(move: Move, allowProbing: boolean = false): MoveResult {
     const piece = this.getPiece(move.from);
 
     if (!piece) {
@@ -99,7 +99,7 @@ export class ClassicalBoard {
       return { success: false, wasCapture: false, wasCheck: false };
     }
 
-    if (!this.isValidMove(move)) {
+    if (!this.isValidMove(move, allowProbing)) {
       return { success: false, wasCapture: false, wasCheck: false };
     }
 
@@ -135,8 +135,8 @@ export class ClassicalBoard {
     return { success: true, wasCapture, wasCheck, capturedPiece };
   }
 
-  // Validate if a move is legal
-  private isValidMove(move: Move): boolean {
+  // Validate if a move is legal (classical board only, doesn't account for quantum probing)
+  isValidMove(move: Move, allowProbing: boolean = false): boolean {
     const piece = this.getPiece(move.from);
     if (!piece) return false;
 
@@ -144,41 +144,55 @@ export class ClassicalBoard {
     if (target && target.color === piece.color) return false;
 
     // Check piece-specific movement rules
-    if (!this.isValidPieceMove(move, piece)) return false;
+    if (!this.isValidPieceMove(move, piece, allowProbing)) return false;
 
     // Check if path is clear (for sliding pieces)
     if (!this.isPathClear(move, piece)) return false;
+
+    // Allow move to empty square if it's a probing move and destination would be valid with a piece there
+    if (allowProbing && !target) {
+      // Already checked with isValidPieceMove above, so probing is allowed
+      return true;
+    }
 
     // TODO: Check if move leaves king in check (implement later)
 
     return true;
   }
 
-  private isValidPieceMove(move: Move, piece: Piece): boolean {
+  private isValidPieceMove(move: Move, piece: Piece, allowProbing: boolean = false): boolean {
     const dx = move.to.col - move.from.col;
     const dy = move.to.row - move.from.row;
     const absDx = Math.abs(dx);
     const absDy = Math.abs(dy);
+    const target = this.getPiece(move.to);
 
     switch (piece.type) {
       case 'pawn': {
         const direction = piece.color === 'white' ? 1 : -1;
         const startRow = piece.color === 'white' ? 1 : 6;
 
-        // Forward move
-        if (dx === 0 && dy === direction && !this.getPiece(move.to)) {
+        // Forward move (only on empty square)
+        if (dx === 0 && dy === direction && !target) {
           return true;
         }
 
-        // Initial two-square move
-        if (dx === 0 && dy === 2 * direction && move.from.row === startRow && !this.getPiece(move.to)) {
+        // Initial two-square move (only on empty square)
+        if (dx === 0 && dy === 2 * direction && move.from.row === startRow && !target) {
           const middlePos = { row: move.from.row + direction, col: move.from.col };
           if (!this.getPiece(middlePos)) return true;
         }
 
-        // Capture
-        if (absDx === 1 && dy === direction && this.getPiece(move.to)) {
-          return true;
+        // Capture (including probing moves on empty squares with opponent ghosts)
+        if (absDx === 1 && dy === direction) {
+          // Normal capture
+          if (target) {
+            return true;  // Normal capture
+          }
+          // Probing move to empty square (only if ghost detected)
+          if (allowProbing) {
+            return true;  // Probing move to empty square with ghost
+          }
         }
 
         return false;

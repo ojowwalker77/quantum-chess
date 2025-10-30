@@ -24,6 +24,74 @@ function generateRoomCode(): string {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
+// Utility: Format position as chess notation
+function posToNotation(pos: { row: number; col: number }): string {
+  const files = "abcdefgh";
+  const ranks = "12345678";
+  return files[pos.col] + ranks[pos.row];
+}
+
+// Utility: Create board map showing what a player sees
+function createBoardMap(
+  myPieces: Array<{ type: string; position: Position }>,
+  opponentQuantumStates: any[]  // Can be QuantumPiece[] or formatted objects
+): string[][] {
+  const board: string[][] = Array(8)
+    .fill(null)
+    .map(() => Array(8).fill("."));
+
+  // Place own pieces (classical, non-superposed)
+  const pieceMap: Record<string, string> = {
+    pawn: "P",
+    knight: "N",
+    bishop: "B",
+    rook: "R",
+    queen: "Q",
+    king: "K"
+  };
+
+  for (const piece of myPieces) {
+    const symbol = pieceMap[piece.type] || "?";
+    board[piece.position.row][piece.position.col] = symbol;
+  }
+
+  // Place opponent pieces (with ghosts)
+  for (const qp of opponentQuantumStates) {
+    // Handle both QuantumPiece objects and formatted {piece: string, positions} objects
+    const pieceType = qp.piece?.type || qp.piece;
+    const symbol = "*" + (pieceMap[pieceType] || "?");
+
+    for (const pos of qp.positions) {
+      const current = board[pos.row][pos.col];
+      // If multiple ghosts on same square, show all
+      if (current === ".") {
+        board[pos.row][pos.col] = symbol;
+      } else if (current.startsWith("*")) {
+        board[pos.row][pos.col] = current + "+" + symbol; // Multiple ghosts
+      }
+    }
+  }
+
+  return board;
+}
+
+// Utility: Print board to console with coordinates
+function printBoard(boardMap: string[][], playerColor: string): string {
+  const files = "  a b c d e f g h";
+  let output = `\n=== ${playerColor.toUpperCase()}'s VIEW ===\n${files}\n`;
+
+  for (let row = 7; row >= 0; row--) {
+    output += `${row + 1} `;
+    for (let col = 0; col < 8; col++) {
+      const cell = boardMap[row][col];
+      output += cell.padEnd(3);
+    }
+    output += `${row + 1}\n`;
+  }
+  output += files + "\n";
+  return output;
+}
+
 // Send complete game state to a player
 function sendGameState(
   ws: ServerWebSocket<{ room: string; color: PlayerColor }>,
@@ -234,15 +302,22 @@ const server = Bun.serve({
             return;
           }
 
+          const playerColor = ws.data.color as "white" | "black";
+          const opponentColor = playerColor === "white" ? "black" : "white";
+
           // Calculate ghost positions BEFORE moving (from origin square!)
-          const opponentColor = ws.data.color === "white" ? "black" : "white";
           const ghostPositions = room.board.getQuietMoves(data.from, opponentColor);
 
+          // Check for probing moves (moving to opponent's ghost square)
+          const hasOpponentGhost = room.quantumState.hasOpponentGhost(data.to, playerColor);
+          const allowProbing = hasOpponentGhost;
+
           // Validate and execute move on classical board (source of truth)
+          // Pass allowProbing flag to permit pawn diagonal captures on ghosts
           const moveResult = room.board.makeMove({
             from: data.from,
             to: data.to
-          });
+          }, allowProbing);
 
           if (!moveResult.success) {
             // Invalid move - notify player
@@ -253,15 +328,47 @@ const server = Bun.serve({
             return;
           }
 
+          // Handle self-ghost collapse: if moved to own ghost, collapse that piece
+          const ownGhostPiece = room.quantumState.getOwnGhostPiece(data.to, playerColor);
+          if (ownGhostPiece) {
+            room.quantumState.collapsePiece(ownGhostPiece.piece);
+          }
+
+          // Handle opponent ghost probing: if probed opponent ghost (no capture), collapse their piece
+          if (allowProbing && !moveResult.wasCapture) {
+            // This was a probe on an empty square with opponent ghost
+            // Find which opponent piece had the ghost and collapse it
+            const opponentQuantumState = room.quantumState.getOpponentQuantumState(playerColor);
+            for (const qp of opponentQuantumState) {
+              if (qp.positions.some(pos => pos.row === data.to.row && pos.col === data.to.col)) {
+                // Found the piece with the ghost - collapse it to true position
+                room.quantumState.collapsePiece(qp.piece);
+                break;
+              }
+            }
+          }
+
+          // Prevent castled pieces from entering superposition (castling is classical)
+          let modifiedWasCapture = moveResult.wasCapture;
+          let modifiedWasCheck = moveResult.wasCheck;
+          let ghostPositionsForQuantum = ghostPositions;
+
+          // If castling, force collapse (no superposition for castled pieces)
+          if (movingPiece.type === 'king' && Math.abs(data.to.col - data.from.col) === 2) {
+            modifiedWasCapture = true;  // Force collapse by treating as "capture-like"
+            modifiedWasCheck = moveResult.wasCheck || modifiedWasCheck;
+            ghostPositionsForQuantum = []; // No ghosts for castling
+          }
+
           // Update quantum state manager with pre-calculated ghost positions
           room.quantumState.updateAfterMove(
             data.from,
             data.to,
             movingPiece,
-            moveResult.wasCapture,
-            moveResult.wasCheck,
+            modifiedWasCapture,
+            modifiedWasCheck,
             moveResult.wasCapture ? data.to : undefined,
-            ghostPositions  // Pass pre-calculated ghosts from origin
+            ghostPositionsForQuantum  // Pass pre-calculated ghosts from origin
           );
 
           // Get piece type for notation
@@ -292,7 +399,34 @@ const server = Bun.serve({
             );
           }
 
+          console.log(`\n${'='.repeat(60)}`);
           console.log(`Move: ${notation} in room ${ws.data.room}`);
+          console.log(`${'='.repeat(60)}`);
+
+          // Log board state for DEBUGGING
+          const whiteMyPieces = room.quantumState.getMyPieces('white');
+          const whitOpponentQuantum = room.quantumState.getOpponentQuantumState('white');
+          const blackMyPieces = room.quantumState.getMyPieces('black');
+          const blackOpponentQuantum = room.quantumState.getOpponentQuantumState('black');
+
+          const whiteBoardMap = createBoardMap(whiteMyPieces, whitOpponentQuantum);
+          const blackBoardMap = createBoardMap(blackMyPieces, blackOpponentQuantum);
+
+          console.log(printBoard(whiteBoardMap, 'white'));
+          console.log(printBoard(blackBoardMap, 'black'));
+
+          // Log quantum state details
+          console.log("WHITE sees opponent (black) pieces:");
+          for (const qp of whitOpponentQuantum) {
+            const positions = qp.positions.map(posToNotation).join(", ");
+            console.log(`  *${qp.piece.type.charAt(0).toUpperCase() + qp.piece.type.slice(1)}: {${positions}} - ${(qp.probability * 100).toFixed(1)}% each`);
+          }
+
+          console.log("BLACK sees opponent (white) pieces:");
+          for (const qp of blackOpponentQuantum) {
+            const positions = qp.positions.map(posToNotation).join(", ");
+            console.log(`  *${qp.piece.type.charAt(0).toUpperCase() + qp.piece.type.slice(1)}: {${positions}} - ${(qp.probability * 100).toFixed(1)}% each`);
+          }
 
           // Send complete game state to BOTH players
           const opponent = ws.data.color === "white" ? room.black : room.white;
