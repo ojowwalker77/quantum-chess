@@ -16,23 +16,47 @@ export interface Position {
 export interface Move {
   from: Position;
   to: Position;
+  promotion?: PieceType; // For pawn promotion (queen, rook, bishop, knight)
 }
 
 export interface MoveResult {
   success: boolean;
   wasCapture: boolean;
   wasCheck: boolean;
+  wasCheckmate: boolean;
+  wasStalemate: boolean;
+  wasPromotion: boolean;
+  wasEnPassant: boolean;
+  enPassantCapturePos?: Position; // Position where en passant captured pawn was
   capturedPiece?: Piece;
+  promotedTo?: PieceType;
 }
 
 export class ClassicalBoard {
   // 8x8 board, null = empty square
   private board: (Piece | null)[][];
   private currentTurn: Color = 'white';
+  private enPassantTarget: Position | null = null; // Square where en passant capture is possible
+
+  // Castling rights tracking
+  private castlingRights = {
+    whiteKingside: true,
+    whiteQueenside: true,
+    blackKingside: true,
+    blackQueenside: true
+  };
 
   constructor() {
     this.board = Array(8).fill(null).map(() => Array(8).fill(null));
     this.initializeBoard();
+  }
+
+  getEnPassantTarget(): Position | null {
+    return this.enPassantTarget;
+  }
+
+  getCastlingRights() {
+    return { ...this.castlingRights };
   }
 
   private initializeBoard(): void {
@@ -112,6 +136,40 @@ export class ClassicalBoard {
     this.setPiece(move.to, piece);
     this.setPiece(move.from, null);
 
+    // Handle en passant capture
+    let enPassantCapture = false;
+    let enPassantCapturePos: Position | undefined;
+    if (piece.type === 'pawn' && this.enPassantTarget &&
+        move.to.row === this.enPassantTarget.row && move.to.col === this.enPassantTarget.col) {
+      // En passant capture - remove the captured pawn
+      const capturedPawnRow = piece.color === 'white' ? move.to.row - 1 : move.to.row + 1;
+      enPassantCapturePos = { row: capturedPawnRow, col: move.to.col };
+      this.setPiece(enPassantCapturePos, null);
+      enPassantCapture = true;
+    }
+
+    // Update en passant target for next move
+    if (piece.type === 'pawn' && Math.abs(move.to.row - move.from.row) === 2) {
+      // Pawn moved two squares - set en passant target
+      const epRow = piece.color === 'white' ? move.from.row + 1 : move.from.row - 1;
+      this.enPassantTarget = { row: epRow, col: move.from.col };
+    } else {
+      this.enPassantTarget = null;
+    }
+
+    // Handle pawn promotion
+    let wasPromotion = false;
+    let promotedTo: PieceType | undefined;
+    if (piece.type === 'pawn') {
+      const promotionRank = piece.color === 'white' ? 7 : 0;
+      if (move.to.row === promotionRank) {
+        // Default to queen if no promotion piece specified
+        promotedTo = move.promotion || 'queen';
+        this.setPiece(move.to, { type: promotedTo, color: piece.color });
+        wasPromotion = true;
+      }
+    }
+
     // Handle castling - move rook
     if (piece.type === 'king' && Math.abs(move.to.col - move.from.col) === 2) {
       const isKingside = move.to.col > move.from.col;
@@ -125,6 +183,33 @@ export class ClassicalBoard {
       }
     }
 
+    // Update castling rights
+    if (piece.type === 'king') {
+      if (piece.color === 'white') {
+        this.castlingRights.whiteKingside = false;
+        this.castlingRights.whiteQueenside = false;
+      } else {
+        this.castlingRights.blackKingside = false;
+        this.castlingRights.blackQueenside = false;
+      }
+    }
+    if (piece.type === 'rook') {
+      if (piece.color === 'white') {
+        if (move.from.row === 0 && move.from.col === 0) this.castlingRights.whiteQueenside = false;
+        if (move.from.row === 0 && move.from.col === 7) this.castlingRights.whiteKingside = false;
+      } else {
+        if (move.from.row === 7 && move.from.col === 0) this.castlingRights.blackQueenside = false;
+        if (move.from.row === 7 && move.from.col === 7) this.castlingRights.blackKingside = false;
+      }
+    }
+    // Also revoke castling rights if rook is captured
+    if (wasCapture) {
+      if (move.to.row === 0 && move.to.col === 0) this.castlingRights.whiteQueenside = false;
+      if (move.to.row === 0 && move.to.col === 7) this.castlingRights.whiteKingside = false;
+      if (move.to.row === 7 && move.to.col === 0) this.castlingRights.blackQueenside = false;
+      if (move.to.row === 7 && move.to.col === 7) this.castlingRights.blackKingside = false;
+    }
+
     // Check if opponent is in check
     const opponentColor = this.currentTurn === 'white' ? 'black' : 'white';
     const wasCheck = this.isInCheck(opponentColor);
@@ -132,7 +217,25 @@ export class ClassicalBoard {
     // Switch turn
     this.currentTurn = opponentColor;
 
-    return { success: true, wasCapture, wasCheck, capturedPiece };
+    // Check for checkmate or stalemate
+    const wasCheckmate = wasCheck && this.isCheckmate(opponentColor);
+    const wasStalemate = !wasCheck && this.isStalemate(opponentColor);
+
+    // Include en passant in wasCapture
+    const actualCapture = wasCapture || enPassantCapture;
+
+    return {
+      success: true,
+      wasCapture: actualCapture,
+      wasCheck,
+      wasCheckmate,
+      wasStalemate,
+      wasPromotion,
+      wasEnPassant: enPassantCapture,
+      enPassantCapturePos,
+      capturedPiece,
+      promotedTo
+    };
   }
 
   // Validate if a move is legal (classical board only, doesn't account for quantum probing)
@@ -155,9 +258,55 @@ export class ClassicalBoard {
       return true;
     }
 
-    // TODO: Check if move leaves king in check (implement later)
+    // Check if move leaves own king in check
+    if (this.wouldLeaveKingInCheck(move)) {
+      return false;
+    }
 
     return true;
+  }
+
+  // Check if making a move would leave the moving player's king in check
+  private wouldLeaveKingInCheck(move: Move): boolean {
+    const piece = this.getPiece(move.from);
+    if (!piece) return false;
+
+    const targetPiece = this.getPiece(move.to);
+
+    // Simulate the move
+    this.setPiece(move.to, piece);
+    this.setPiece(move.from, null);
+
+    // Handle castling - also move the rook temporarily
+    let rookOriginalPos: Position | null = null;
+    let rookNewPos: Position | null = null;
+    if (piece.type === 'king' && Math.abs(move.to.col - move.from.col) === 2) {
+      const isKingside = move.to.col > move.from.col;
+      rookOriginalPos = { row: move.from.row, col: isKingside ? 7 : 0 };
+      rookNewPos = { row: move.from.row, col: isKingside ? move.to.col - 1 : move.to.col + 1 };
+      const rook = this.getPiece(rookOriginalPos);
+      if (rook) {
+        this.setPiece(rookNewPos, rook);
+        this.setPiece(rookOriginalPos, null);
+      }
+    }
+
+    const inCheck = this.isInCheck(piece.color);
+
+    // Undo castling rook move
+    if (rookOriginalPos && rookNewPos) {
+      const rook = this.getPiece(rookNewPos);
+      if (rook) {
+        this.setPiece(rookOriginalPos, rook);
+        this.setPiece(rookNewPos, null);
+      }
+    }
+
+    // Undo the move
+    this.setPiece(move.from, piece);
+    this.setPiece(move.to, targetPiece);
+
+    return inCheck;
   }
 
   private isValidPieceMove(move: Move, piece: Piece, allowProbing: boolean = false): boolean {
@@ -189,6 +338,12 @@ export class ClassicalBoard {
           if (target) {
             return true;  // Normal capture
           }
+          // En passant capture
+          if (this.enPassantTarget &&
+              move.to.row === this.enPassantTarget.row &&
+              move.to.col === this.enPassantTarget.col) {
+            return true;  // En passant capture
+          }
           // Probing move to empty square (only if ghost detected)
           if (allowProbing) {
             return true;  // Probing move to empty square with ghost
@@ -216,12 +371,61 @@ export class ClassicalBoard {
 
         // Castling
         if (absDy === 0 && absDx === 2) {
-          // TODO: Check castling conditions (king/rook not moved, path clear, not in check)
-          return true;
+          return this.canCastle(piece.color, dx > 0);
         }
 
         return false;
     }
+  }
+
+  // Check if castling is legal
+  private canCastle(color: Color, kingside: boolean): boolean {
+    const row = color === 'white' ? 0 : 7;
+
+    // Check castling rights
+    if (color === 'white') {
+      if (kingside && !this.castlingRights.whiteKingside) return false;
+      if (!kingside && !this.castlingRights.whiteQueenside) return false;
+    } else {
+      if (kingside && !this.castlingRights.blackKingside) return false;
+      if (!kingside && !this.castlingRights.blackQueenside) return false;
+    }
+
+    // Check king is not in check
+    if (this.isInCheck(color)) return false;
+
+    // Check path is clear
+    const kingCol = 4;
+    const rookCol = kingside ? 7 : 0;
+    const direction = kingside ? 1 : -1;
+
+    // Check squares between king and rook are empty
+    for (let col = kingCol + direction; col !== rookCol; col += direction) {
+      if (this.getPiece({ row, col })) return false;
+    }
+
+    // Check king doesn't pass through or end on attacked square
+    const squaresToCheck = kingside ? [5, 6] : [2, 3];
+    for (const col of squaresToCheck) {
+      // Temporarily place king there and check for attacks
+      const originalKingPos = { row, col: kingCol };
+      const testPos = { row, col };
+      const king = this.getPiece(originalKingPos);
+      if (!king) return false;
+
+      this.setPiece(originalKingPos, null);
+      this.setPiece(testPos, king);
+
+      const inCheck = this.isInCheck(color);
+
+      // Restore
+      this.setPiece(originalKingPos, king);
+      this.setPiece(testPos, null);
+
+      if (inCheck) return false;
+    }
+
+    return true;
   }
 
   private isPathClear(move: Move, piece: Piece): boolean {
@@ -343,5 +547,36 @@ export class ClassicalBoard {
     }
 
     return quietMoves;
+  }
+
+  // Get all legal moves for a color (moves that don't leave king in check)
+  getLegalMoves(color: Color): Move[] {
+    const legalMoves: Move[] = [];
+    const pieces = this.getPieces(color);
+
+    for (const { position } of pieces) {
+      for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+          const move = { from: position, to: { row, col } };
+          if (this.isValidMove(move)) {
+            legalMoves.push(move);
+          }
+        }
+      }
+    }
+
+    return legalMoves;
+  }
+
+  // Check if a color is in checkmate (in check with no legal moves)
+  isCheckmate(color: Color): boolean {
+    if (!this.isInCheck(color)) return false;
+    return this.getLegalMoves(color).length === 0;
+  }
+
+  // Check if a color is in stalemate (not in check but no legal moves)
+  isStalemate(color: Color): boolean {
+    if (this.isInCheck(color)) return false;
+    return this.getLegalMoves(color).length === 0;
   }
 }

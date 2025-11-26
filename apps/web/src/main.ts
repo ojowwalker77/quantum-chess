@@ -19,6 +19,9 @@ let selectedSquare: Position | null = null;
 // Server-provided game state (source of truth)
 let gameState: ServerMessage | null = null;
 
+// Move history
+let moveHistory: string[] = [];
+
 // WebSocket connection
 function connectWebSocket(): void {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -70,6 +73,12 @@ function handleServerMessage(data: ServerMessage): void {
             selectedSquare = null; // Clear selection when state updates
             updateBoard();
 
+            // Check for game over
+            if (data.gameOver) {
+                handleGameOver(data.gameOver);
+                break;
+            }
+
             // Update turn status
             const isMyTurn = data.currentTurn === myColor;
             if (isMyTurn) {
@@ -93,6 +102,14 @@ function handleServerMessage(data: ServerMessage): void {
 
         case 'opponent_disconnected':
             document.getElementById('status')!.textContent = 'Opponent disconnected';
+            break;
+
+        case 'move_made':
+            // Add move to history
+            if (data.notation) {
+                moveHistory.push(data.notation);
+                updateMoveHistory();
+            }
             break;
 
         case 'error':
@@ -272,7 +289,7 @@ function updateBoard(): void {
 }
 
 function handleSquareClick(row: number, col: number): void {
-    if (!myColor || !gameState) return;
+    if (!myColor || !gameState || isGameOver) return;
 
     const isMyTurn = gameState.currentTurn === myColor;
 
@@ -297,14 +314,26 @@ function handleSquareClick(row: number, col: number): void {
             selectedSquare = null;
             updateBoard();
         } else {
-            // Send move request to server (server validates and executes)
-            ws.send(JSON.stringify({
-                type: 'move',
-                from: { row: selectedSquare.row, col: selectedSquare.col },
-                to: { row, col }
-            }));
+            // Check if this is a pawn promotion move
+            const selectedPiece = gameState.myPieces?.find(p =>
+                p.position.row === selectedSquare.row && p.position.col === selectedSquare.col
+            );
+            const isPromotion = selectedPiece?.type === 'pawn' &&
+                ((myColor === 'white' && row === 7) || (myColor === 'black' && row === 0));
 
-            document.getElementById('status')!.textContent = 'Waiting for server...';
+            if (isPromotion) {
+                // Show promotion dialog
+                showPromotionDialog(selectedSquare, { row, col });
+            } else {
+                // Send move request to server (server validates and executes)
+                ws.send(JSON.stringify({
+                    type: 'move',
+                    from: { row: selectedSquare.row, col: selectedSquare.col },
+                    to: { row, col }
+                }));
+
+                document.getElementById('status')!.textContent = 'Waiting for server...';
+            }
             // Server will send game_state which will clear selectedSquare
         }
     } else {
@@ -315,6 +344,158 @@ function handleSquareClick(row: number, col: number): void {
             document.getElementById('status')!.textContent = 'Select destination';
         }
     }
+}
+
+// Game over state
+let isGameOver = false;
+
+function showPromotionDialog(from: Position, to: Position): void {
+    const modal = document.createElement('div');
+    modal.id = 'promotionModal';
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.8);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+    `;
+
+    const content = document.createElement('div');
+    content.style.cssText = `
+        background: #1a1a1a;
+        padding: 20px;
+        border-radius: 10px;
+        text-align: center;
+        border: 2px solid #444;
+    `;
+
+    const title = document.createElement('h3');
+    title.textContent = 'Choose promotion piece';
+    title.style.cssText = 'color: #fff; margin-bottom: 15px;';
+    content.appendChild(title);
+
+    const pieces: Array<{ type: PieceType; symbol: string }> = [
+        { type: 'queen', symbol: myColor === 'white' ? '♕' : '♛' },
+        { type: 'rook', symbol: myColor === 'white' ? '♖' : '♜' },
+        { type: 'bishop', symbol: myColor === 'white' ? '♗' : '♝' },
+        { type: 'knight', symbol: myColor === 'white' ? '♘' : '♞' }
+    ];
+
+    const buttonContainer = document.createElement('div');
+    buttonContainer.style.cssText = 'display: flex; gap: 10px; justify-content: center;';
+
+    for (const { type, symbol } of pieces) {
+        const button = document.createElement('button');
+        button.textContent = symbol;
+        button.style.cssText = `
+            width: 60px;
+            height: 60px;
+            font-size: 40px;
+            cursor: pointer;
+            background: #333;
+            color: ${myColor === 'white' ? '#fff' : '#000'};
+            border: 2px solid #666;
+            border-radius: 5px;
+        `;
+        button.onclick = () => {
+            modal.remove();
+            // Send move with promotion
+            ws.send(JSON.stringify({
+                type: 'move',
+                from: { row: from.row, col: from.col },
+                to: { row: to.row, col: to.col },
+                promotion: type
+            }));
+            document.getElementById('status')!.textContent = 'Waiting for server...';
+        };
+        buttonContainer.appendChild(button);
+    }
+
+    content.appendChild(buttonContainer);
+    modal.appendChild(content);
+    document.body.appendChild(modal);
+}
+
+function handleGameOver(gameOver: { winner: string; reason: string }): void {
+    isGameOver = true;
+
+    let message: string;
+    if (gameOver.reason === 'checkmate') {
+        if (gameOver.winner === myColor) {
+            message = 'CHECKMATE! You win!';
+        } else {
+            message = 'CHECKMATE! You lose.';
+        }
+    } else if (gameOver.reason === 'stalemate') {
+        message = 'STALEMATE! Game is a draw.';
+    } else if (gameOver.reason === 'resign') {
+        if (gameOver.winner === myColor) {
+            message = 'Opponent resigned. You win!';
+        } else {
+            message = 'You resigned. Opponent wins.';
+        }
+    } else {
+        message = `Game over: ${gameOver.winner} wins by ${gameOver.reason}`;
+    }
+
+    document.getElementById('status')!.textContent = message;
+    showGameOverModal(message);
+}
+
+function showGameOverModal(message: string): void {
+    const modal = document.createElement('div');
+    modal.id = 'gameOverModal';
+    modal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0,0,0,0.8);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+    `;
+
+    const content = document.createElement('div');
+    content.style.cssText = `
+        background: #1a1a1a;
+        padding: 40px;
+        border-radius: 10px;
+        text-align: center;
+        border: 2px solid #444;
+    `;
+
+    const text = document.createElement('h2');
+    text.textContent = message;
+    text.style.cssText = 'color: #fff; margin-bottom: 20px; font-size: 24px;';
+
+    const button = document.createElement('button');
+    button.textContent = 'New Game';
+    button.style.cssText = `
+        padding: 10px 30px;
+        font-size: 18px;
+        cursor: pointer;
+        background: #4a4a4a;
+        color: white;
+        border: none;
+        border-radius: 5px;
+    `;
+    button.onclick = () => {
+        modal.remove();
+        location.reload();
+    };
+
+    content.appendChild(text);
+    content.appendChild(button);
+    modal.appendChild(content);
+    document.body.appendChild(modal);
 }
 
 // Rules modal functions
@@ -328,11 +509,42 @@ function closeRules(event?: Event): void {
     }
 }
 
+function resign(): void {
+    if (isGameOver || !ws || ws.readyState !== WebSocket.OPEN) return;
+
+    if (confirm('Are you sure you want to resign?')) {
+        ws.send(JSON.stringify({ type: 'resign' }));
+    }
+}
+
+function updateMoveHistory(): void {
+    const moveList = document.getElementById('moveList');
+    if (!moveList) return;
+
+    let html = '';
+    for (let i = 0; i < moveHistory.length; i += 2) {
+        const moveNum = Math.floor(i / 2) + 1;
+        const whiteMove = moveHistory[i] || '';
+        const blackMove = moveHistory[i + 1] || '';
+
+        html += `<div class="move-row">
+            <span class="move-number">${moveNum}.</span>
+            <span class="move-white">${whiteMove}</span>
+            <span class="move-black">${blackMove}</span>
+        </div>`;
+    }
+    moveList.innerHTML = html;
+
+    // Auto-scroll to bottom
+    moveList.scrollTop = moveList.scrollHeight;
+}
+
 // Make functions globally available
 (window as any).createRoom = createRoom;
 (window as any).joinRoom = joinRoom;
 (window as any).openRules = openRules;
 (window as any).closeRules = closeRules;
+(window as any).resign = resign;
 
 // Start
 init();

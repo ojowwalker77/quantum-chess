@@ -95,7 +95,8 @@ function printBoard(boardMap: string[][], playerColor: string): string {
 // Send complete game state to a player
 function sendGameState(
   ws: ServerWebSocket<{ room: string; color: PlayerColor }>,
-  room: Room
+  room: Room,
+  gameOver?: { winner: PlayerColor | 'draw'; reason: 'checkmate' | 'stalemate' | 'resign' | 'disconnect' }
 ): void {
   if (!ws.data) return;
 
@@ -121,7 +122,8 @@ function sendGameState(
     myPieces,
     opponentQuantumStates,
     currentTurn: room.board.getCurrentTurn(),
-    isInCheck
+    isInCheck,
+    gameOver
   }));
 }
 
@@ -130,7 +132,9 @@ function generateNotation(
   to: { row: number; col: number },
   pieceType?: string,
   wasCapture: boolean = false,
-  wasCheck: boolean = false
+  wasCheck: boolean = false,
+  wasCheckmate: boolean = false,
+  promotedTo?: string
 ): string {
   const files = "abcdefgh";
   const ranks = "12345678";
@@ -158,14 +162,17 @@ function generateNotation(
 
   const piece = pieceType ? (pieceMap[pieceType] || "") : "";
   const capture = wasCapture ? "x" : "";
-  const check = wasCheck ? "+" : "";
+  const checkSymbol = wasCheckmate ? "#" : (wasCheck ? "+" : "");
+
+  // Promotion notation
+  const promotion = promotedTo ? "=" + pieceMap[promotedTo] : "";
 
   // For pawn captures, include the starting file
   if (piece === "" && wasCapture) {
-    return files[from.col] + capture + toSquare + check;
+    return files[from.col] + capture + toSquare + promotion + checkSymbol;
   }
 
-  return piece + capture + toSquare + check;
+  return piece + capture + toSquare + promotion + checkSymbol;
 }
 
 const server = Bun.serve({
@@ -316,7 +323,8 @@ const server = Bun.serve({
           // Pass allowProbing flag to permit pawn diagonal captures on ghosts
           const moveResult = room.board.makeMove({
             from: data.from,
-            to: data.to
+            to: data.to,
+            promotion: data.promotion // Optional promotion piece
           }, allowProbing);
 
           if (!moveResult.success) {
@@ -360,6 +368,14 @@ const server = Bun.serve({
             ghostPositionsForQuantum = []; // No ghosts for castling
           }
 
+          // Determine captured position (different for en passant)
+          let capturedPosition: { row: number; col: number } | undefined;
+          if (moveResult.wasEnPassant) {
+            capturedPosition = moveResult.enPassantCapturePos;
+          } else if (moveResult.wasCapture) {
+            capturedPosition = data.to;
+          }
+
           // Update quantum state manager with pre-calculated ghost positions
           room.quantumState.updateAfterMove(
             data.from,
@@ -367,13 +383,13 @@ const server = Bun.serve({
             movingPiece,
             modifiedWasCapture,
             modifiedWasCheck,
-            moveResult.wasCapture ? data.to : undefined,
+            capturedPosition,
             ghostPositionsForQuantum  // Pass pre-calculated ghosts from origin
           );
 
-          // Get piece type for notation
+          // Get piece type for notation (use original piece type for notation, not promoted)
           const piece = room.board.getPiece(data.to);
-          const pieceType = piece?.type;
+          const pieceType = moveResult.wasPromotion ? 'pawn' : piece?.type;
 
           // Generate chess notation
           const notation = generateNotation(
@@ -381,7 +397,9 @@ const server = Bun.serve({
             data.to,
             pieceType,
             moveResult.wasCapture,
-            moveResult.wasCheck
+            moveResult.wasCheck,
+            moveResult.wasCheckmate,
+            moveResult.promotedTo
           );
 
           // Record move in database
@@ -398,6 +416,16 @@ const server = Bun.serve({
               moveResult.wasCheck
             );
           }
+
+          // Send move notification to both players for move history
+          const moveNotification = {
+            type: "move_made",
+            notation,
+            color: ws.data.color,
+            moveNumber: room.moveCount
+          };
+          if (room.white) room.white.send(JSON.stringify(moveNotification));
+          if (room.black) room.black.send(JSON.stringify(moveNotification));
 
           console.log(`\n${'='.repeat(60)}`);
           console.log(`Move: ${notation} in room ${ws.data.room}`);
@@ -428,11 +456,56 @@ const server = Bun.serve({
             console.log(`  *${qp.piece.type.charAt(0).toUpperCase() + qp.piece.type.slice(1)}: {${positions}} - ${(qp.probability * 100).toFixed(1)}% each`);
           }
 
+          // Check for game over conditions
+          let gameOver: { winner: PlayerColor | 'draw'; reason: 'checkmate' | 'stalemate' | 'resign' | 'disconnect' } | undefined;
+
+          if (moveResult.wasCheckmate) {
+            gameOver = { winner: playerColor, reason: 'checkmate' };
+            console.log(`\n*** CHECKMATE! ${playerColor.toUpperCase()} wins! ***\n`);
+
+            // End game in database
+            if (room.gameId) {
+              db.endGame(room.gameId, playerColor, "checkmate");
+            }
+          } else if (moveResult.wasStalemate) {
+            gameOver = { winner: 'draw', reason: 'stalemate' };
+            console.log(`\n*** STALEMATE! Game is a draw. ***\n`);
+
+            // End game in database
+            if (room.gameId) {
+              db.endGame(room.gameId, "draw", "stalemate");
+            }
+          }
+
           // Send complete game state to BOTH players
           const opponent = ws.data.color === "white" ? room.black : room.white;
 
-          if (room.white) sendGameState(room.white, room);
-          if (room.black) sendGameState(room.black, room);
+          if (room.white) sendGameState(room.white, room, gameOver);
+          if (room.black) sendGameState(room.black, room, gameOver);
+
+          break;
+        }
+
+        case "resign": {
+          if (!ws.data?.room) return;
+
+          const room = rooms.get(ws.data.room);
+          if (!room) return;
+
+          const resigningPlayer = ws.data.color as PlayerColor;
+          const winner = resigningPlayer === "white" ? "black" : "white";
+
+          console.log(`\n*** ${resigningPlayer.toUpperCase()} RESIGNED! ${winner.toUpperCase()} wins! ***\n`);
+
+          // End game in database
+          if (room.gameId) {
+            db.endGame(room.gameId, winner, "resign");
+          }
+
+          const gameOver = { winner, reason: 'resign' as const };
+
+          if (room.white) sendGameState(room.white, room, gameOver);
+          if (room.black) sendGameState(room.black, room, gameOver);
 
           break;
         }

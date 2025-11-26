@@ -70,6 +70,10 @@ export interface ServerMessage {
   opponentQuantumStates?: QuantumState[];
   currentTurn?: PlayerColor;
   isInCheck?: boolean;
+  gameOver?: {
+    winner: PlayerColor | 'draw';
+    reason: 'checkmate' | 'stalemate' | 'resign' | 'disconnect';
+  };
 
   // move_confirmed message
   move?: Move;
@@ -86,4 +90,8 @@ export interface ServerMessage {
 
   // move_rejected message
   reason?: string;
+
+  // move_made message
+  notation?: string;
+  moveNumber?: number;
 }
