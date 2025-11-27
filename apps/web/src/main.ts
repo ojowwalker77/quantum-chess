@@ -1,6 +1,5 @@
 import type { WasmExports, PlayerColor, Position, ServerMessage } from "./wasm-types";
 
-// Chess pieces
 const PIECES = {
     white: { pawn: '♙', knight: '♘', bishop: '♗', rook: '♖', queen: '♕', king: '♔' },
     black: { pawn: '♟', knight: '♞', bishop: '♝', rook: '♜', queen: '♛', king: '♚' }
@@ -9,20 +8,16 @@ const PIECES = {
 const PIECE_TYPES = ['pawn', 'knight', 'bishop', 'rook', 'queen', 'king'] as const;
 const COLORS = ['white', 'black'] as const;
 
-// Game state
 let wasm: WasmExports;
 let ws: WebSocket;
 let roomCode: string | null = null;
 let myColor: PlayerColor | null = null;
 let selectedSquare: Position | null = null;
 
-// Server-provided game state (source of truth)
 let gameState: ServerMessage | null = null;
 
-// Move history
 let moveHistory: string[] = [];
 
-// WebSocket connection
 function connectWebSocket(): void {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${protocol}//${window.location.host}`);
@@ -67,19 +62,16 @@ function handleServerMessage(data: ServerMessage): void {
             break;
 
         case 'game_state':
-            // Received complete game state from server - store and render
             console.log('Game state received:', data);
             gameState = data;
-            selectedSquare = null; // Clear selection when state updates
+            selectedSquare = null;
             updateBoard();
 
-            // Check for game over
             if (data.gameOver) {
                 handleGameOver(data.gameOver);
                 break;
             }
 
-            // Update turn status
             const isMyTurn = data.currentTurn === myColor;
             if (isMyTurn) {
                 document.getElementById('status')!.textContent = 'Your turn';
@@ -87,14 +79,12 @@ function handleServerMessage(data: ServerMessage): void {
                 document.getElementById('status')!.textContent = "Opponent's turn";
             }
 
-            // Show check warning
             if (data.isInCheck && isMyTurn) {
                 document.getElementById('status')!.textContent = 'Your turn - CHECK!';
             }
             break;
 
         case 'move_rejected':
-            // Our move was rejected by server
             console.error('Move rejected:', data.reason);
             document.getElementById('status')!.textContent = `Invalid move: ${data.reason}`;
             selectedSquare = null;
@@ -105,7 +95,6 @@ function handleServerMessage(data: ServerMessage): void {
             break;
 
         case 'move_made':
-            // Add move to history
             if (data.notation) {
                 moveHistory.push(data.notation);
                 updateMoveHistory();
@@ -154,7 +143,6 @@ function setLobbyStatus(msg: string): void {
     document.getElementById('lobbyStatus')!.textContent = msg;
 }
 
-// Initialize WASM
 async function init(): Promise<void> {
     try {
         const response = await fetch('wasm/quantum-chess.wasm');
@@ -169,7 +157,6 @@ async function init(): Promise<void> {
     }
 }
 
-// Board UI
 function createBoard(): void {
     const board = document.getElementById('board')!;
     board.innerHTML = '';
@@ -193,14 +180,12 @@ function updateBoard(): void {
     const squares = board.children;
     const isMyTurn = gameState.currentTurn === myColor;
 
-    // Clear all squares
     for (let i = 0; i < 64; i++) {
         const square = squares[i] as HTMLElement;
         square.innerHTML = '';
         square.classList.remove('selected', 'valid-move', 'in-check');
     }
 
-    // Render my pieces (classical view from server)
     if (gameState.myPieces) {
         for (const { type, position } of gameState.myPieces) {
             const squareIndex = (7 - position.row) * 8 + position.col;
@@ -214,10 +199,8 @@ function updateBoard(): void {
         }
     }
 
-    // Render opponent quantum pieces
     if (gameState.opponentQuantumStates) {
         for (const quantumState of gameState.opponentQuantumStates) {
-            // For each quantum piece, render it at all its possible positions
             for (const position of quantumState.positions) {
                 const squareIndex = (7 - position.row) * 8 + position.col;
                 const square = squares[squareIndex] as HTMLElement;
@@ -247,13 +230,11 @@ function updateBoard(): void {
         }
     }
 
-    // Highlight selected square
     if (selectedSquare) {
         const squareIndex = (7 - selectedSquare.row) * 8 + selectedSquare.col;
         const square = squares[squareIndex] as HTMLElement;
         square.classList.add('selected');
 
-        // Show valid moves using local WASM validation (for UI only)
         if (isMyTurn && wasm) {
             const myColorIndex = COLORS.indexOf(myColor);
             for (let row = 0; row < 8; row++) {
@@ -269,13 +250,10 @@ function updateBoard(): void {
         }
     }
 
-    // Update turn display
     document.getElementById('turnDisplay')!.textContent = `turn: ${gameState.currentTurn}`;
 
-    // Check indicator
     document.getElementById('checkDisplay')!.style.display = gameState.isInCheck ? 'inline' : 'none';
 
-    // Highlight king in check
     if (gameState.isInCheck && isMyTurn && gameState.myPieces) {
         for (const { type, position } of gameState.myPieces) {
             if (type === 'king') {
@@ -298,7 +276,6 @@ function handleSquareClick(row: number, col: number): void {
         return;
     }
 
-    // Check if there's a piece at clicked position (from server state)
     const hasPieceAt = (pos: Position): boolean => {
         return gameState!.myPieces?.some(p =>
             p.position.row === pos.row && p.position.col === pos.col
@@ -306,15 +283,12 @@ function handleSquareClick(row: number, col: number): void {
     };
 
     if (selectedSquare) {
-        // Try to make a move
         const isSameSquare = selectedSquare.row === row && selectedSquare.col === col;
 
         if (isSameSquare) {
-            // Deselect
             selectedSquare = null;
             updateBoard();
         } else {
-            // Check if this is a pawn promotion move
             const selectedPiece = gameState.myPieces?.find(p =>
                 p.position.row === selectedSquare.row && p.position.col === selectedSquare.col
             );
@@ -322,10 +296,8 @@ function handleSquareClick(row: number, col: number): void {
                 ((myColor === 'white' && row === 7) || (myColor === 'black' && row === 0));
 
             if (isPromotion) {
-                // Show promotion dialog
                 showPromotionDialog(selectedSquare, { row, col });
             } else {
-                // Send move request to server (server validates and executes)
                 ws.send(JSON.stringify({
                     type: 'move',
                     from: { row: selectedSquare.row, col: selectedSquare.col },
@@ -334,10 +306,8 @@ function handleSquareClick(row: number, col: number): void {
 
                 document.getElementById('status')!.textContent = 'Waiting for server...';
             }
-            // Server will send game_state which will clear selectedSquare
         }
     } else {
-        // Select a piece if there's one at this position
         if (hasPieceAt({ row, col })) {
             selectedSquare = { row, col };
             updateBoard();
@@ -346,7 +316,6 @@ function handleSquareClick(row: number, col: number): void {
     }
 }
 
-// Game over state
 let isGameOver = false;
 
 function showPromotionDialog(from: Position, to: Position): void {
@@ -404,7 +373,6 @@ function showPromotionDialog(from: Position, to: Position): void {
         `;
         button.onclick = () => {
             modal.remove();
-            // Send move with promotion
             ws.send(JSON.stringify({
                 type: 'move',
                 from: { row: from.row, col: from.col },
@@ -498,7 +466,6 @@ function showGameOverModal(message: string): void {
     document.body.appendChild(modal);
 }
 
-// Rules modal functions
 function openRules(): void {
     document.getElementById('rulesModal')!.style.display = 'flex';
 }
@@ -535,16 +502,13 @@ function updateMoveHistory(): void {
     }
     moveList.innerHTML = html;
 
-    // Auto-scroll to bottom
     moveList.scrollTop = moveList.scrollHeight;
 }
 
-// Make functions globally available
 (window as any).createRoom = createRoom;
 (window as any).joinRoom = joinRoom;
 (window as any).openRules = openRules;
 (window as any).closeRules = closeRules;
 (window as any).resign = resign;
 
-// Start
 init();
